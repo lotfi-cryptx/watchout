@@ -1,3 +1,4 @@
+from typing import Optional
 import sys
 import argparse
 import asyncio
@@ -95,7 +96,7 @@ class ProcessRunner:
 # Define the event handler for file system events
 class FileChangedHandler(FileSystemEventHandler):
 
-    def __init__(self, restart_ev: EventTs, file_extensions: list[str] | None):
+    def __init__(self, restart_ev: EventTs, file_extensions: Optional[list[str]]):
         self.restart_ev = restart_ev
         self.file_extensions = file_extensions
 
