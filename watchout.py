@@ -125,6 +125,31 @@ class FileChangedHandler(FileSystemEventHandler):
         return
 
 
+async def main(config: dict):
+
+    restart_ev = EventTs()
+
+    process_runner = ProcessRunner(config["command"], restart_ev)
+
+    # Create an observer to watch for file system events
+    file_changed_handler = FileChangedHandler(
+        restart_ev, config["file_extensions"])
+    observer = Observer()
+    observer.schedule(
+        file_changed_handler,
+        path=config["directory"],
+        recursive=True)
+    observer.start()
+
+    try:
+        await process_runner.start()
+
+    except KeyboardInterrupt:
+        observer.stop()
+
+    observer.join()
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
@@ -142,24 +167,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     config = vars(args)
 
-    restart_ev = EventTs()
-
-    process_runner = ProcessRunner(config["command"], restart_ev)
-
-    # Create an observer to watch for file system events
-    file_changed_handler = FileChangedHandler(
-        restart_ev, config["file_extensions"])
-    observer = Observer()
-    observer.schedule(
-        file_changed_handler,
-        path=config["directory"],
-        recursive=True)
-    observer.start()
-
-    try:
-        asyncio.run(process_runner.start())
-
-    except KeyboardInterrupt:
-        observer.stop()
-
-    observer.join()
+    asyncio.run(main(config))
