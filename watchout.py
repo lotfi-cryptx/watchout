@@ -37,7 +37,7 @@ class ProcessRunner:
         if self.process:
 
             if self.process.returncode is None:
-                self.process.kill()
+                self.process.terminate()
                 ret = await self.process.wait()
 
         self.running = False
