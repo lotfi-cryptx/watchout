@@ -1,5 +1,7 @@
 from typing import Optional
 import sys
+import os
+import signal
 import argparse
 import asyncio
 from watchdog.observers import Observer
@@ -19,44 +21,49 @@ class EventTs(asyncio.Event):
 
 class ProcessRunner:
 
-    def __init__(self, command: str, restart_ev: EventTs) -> None:
+    def __init__(self, command: str) -> None:
         self.commad = command
-        self.restart_ev = restart_ev
         self.process = None
         self.running = False
 
-    async def spawn_process(self) -> None:
+    async def respawn_process(self) -> None:
+
+        if self.is_process_running:
+            await self.terminate_process()
+
         self.process = await asyncio.create_subprocess_shell(
             self.commad,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # This should be set so that the new process gets assigned to a new process grp
+            start_new_session=True
         )
-        self.running = True
+
+    def is_process_running(self) -> bool:
+        if self.process:
+            if self.process.returncode is None:
+                return True
+        return False
 
     async def terminate_process(self) -> None:
         if self.process:
+            if self.is_process_running():
+                # kill the process and all its children in the same process grp
+                os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
 
-            if self.process.returncode is None:
-                self.process.terminate()
-                ret = await self.process.wait()
+    async def start(self, restart_ev: EventTs) -> None:
 
-        self.running = False
-        return
-
-    async def start(self) -> None:
-
-        await self.terminate_process()
-        await self.spawn_process()
+        await self.respawn_process()
 
         while True:
 
-            if self.running:
+            if self.is_process_running():
 
                 stdout_task = asyncio.create_task(
                     self.process.stdout.readline())
                 stderr_task = asyncio.create_task(
                     self.process.stderr.readline())
-                event_task = asyncio.create_task(self.restart_ev.wait())
+                event_task = asyncio.create_task(restart_ev.wait())
 
                 done, pending = await asyncio.wait(
                     [stdout_task, stderr_task, event_task,],
@@ -64,21 +71,18 @@ class ProcessRunner:
                 )
 
                 if event_task in done:
-                    await self.terminate_process()
-                    await self.spawn_process()
-                    self.restart_ev.clear()
+                    await self.respawn_process()
+                    restart_ev.clear()
                     continue
 
                 if stdout_task in done:
                     if stdout_task.result() == b'':
-                        self.running = False
                         continue
                     print(stdout_task.result().decode(),
                           file=sys.stdout, end='')
 
                 if stderr_task in done:
                     if stderr_task.result() == b'':
-                        self.running = False
                         continue
                     print(stderr_task.result().decode(),
                           file=sys.stderr, end='')
@@ -87,10 +91,9 @@ class ProcessRunner:
                     ptask.cancel()
 
             else:
-                await self.restart_ev.wait()
-                await self.terminate_process()
-                await self.spawn_process()
-                self.restart_ev.clear()
+                await restart_ev.wait()
+                await self.respawn_process()
+                restart_ev.clear()
 
 
 # Define the event handler for file system events
@@ -125,11 +128,9 @@ class FileChangedHandler(FileSystemEventHandler):
         return
 
 
-async def main(config: dict):
+async def main(config: dict, process_runner: ProcessRunner):
 
     restart_ev = EventTs()
-
-    process_runner = ProcessRunner(config["command"], restart_ev)
 
     # Create an observer to watch for file system events
     file_changed_handler = FileChangedHandler(
@@ -142,12 +143,14 @@ async def main(config: dict):
     observer.start()
 
     try:
-        await process_runner.start()
+        await process_runner.start(restart_ev)
 
     except KeyboardInterrupt:
+        pass
+    finally:
         observer.stop()
-
-    observer.join()
+        observer.join()
+    print("Interrupted")
 
 
 if __name__ == "__main__":
@@ -167,4 +170,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     config = vars(args)
 
-    asyncio.run(main(config))
+    process_runner = ProcessRunner(config["command"])
+
+    try:
+        asyncio.run(main(config, process_runner))
+    except KeyboardInterrupt:
+        pass
+    finally:
+
+        async def cleanup_process():
+            await process_runner.terminate_process()
+
+        asyncio.run(cleanup_process())
