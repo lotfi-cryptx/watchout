@@ -99,9 +99,10 @@ class ProcessRunner:
 # Define the event handler for file system events
 class FileChangedHandler(FileSystemEventHandler):
 
-    def __init__(self, restart_ev: EventTs, file_extensions: Optional[list[str]]):
+    def __init__(self, restart_ev: EventTs, file_extensions: Optional[list[str]], exclude_dirs: Optional[list[str]]):
         self.restart_ev = restart_ev
         self.file_extensions = file_extensions
+        self.exclude_dirs = exclude_dirs
 
     def on_modified(self, file_ev: FileSystemEvent):
 
@@ -112,6 +113,11 @@ class FileChangedHandler(FileSystemEventHandler):
         if file_ev.event_type == FileModifiedEvent.event_type:
 
             trigger_restart = False
+
+            if self.exclude_dirs:
+                for exclude_dir in self.exclude_dirs:
+                    if file_ev.src_path.startswith(exclude_dir):
+                        return
 
             if self.file_extensions:
                 for file_extension in self.file_extensions:
@@ -134,7 +140,9 @@ async def main(config: dict, process_runner: ProcessRunner):
 
     # Create an observer to watch for file system events
     file_changed_handler = FileChangedHandler(
-        restart_ev, config["file_extensions"])
+        restart_ev,
+        config["file_extensions"],
+        config["exclude_directories"])
     observer = Observer()
     observer.schedule(
         file_changed_handler,
@@ -165,6 +173,8 @@ if __name__ == "__main__":
                         help="directory to watch", default="./")
     parser.add_argument("-e", "--file-extensions",
                         help="watch only files with these extensions", nargs="*")
+    parser.add_argument("-x", "--exclude-directories",
+                        help="Directories to exclude from watch", nargs="*")
     parser.add_argument("-c", "--command",
                         help="Command to run", required=True)
     args = parser.parse_args()
